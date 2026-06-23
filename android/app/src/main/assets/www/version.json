@@ -1,5 +1,0 @@
-{
-  "version": "0.0.1",
-  "buildTime": "2026-06-23T00:00:00Z",
-  "description": "Default bundled web shell. Replace via hot update with app/ directory package."
-}
