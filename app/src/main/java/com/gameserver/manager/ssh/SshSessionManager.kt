@@ -6,11 +6,9 @@ import net.schmizz.sshj.common.IOUtils
 import net.schmizz.sshj.connection.channel.direct.Session
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile
-import net.schmizz.sshj.userauth.method.AuthMethod
-import net.schmizz.sshj.userauth.method.AuthPassword
-import net.schmizz.sshj.userauth.method.AuthPublickey
 import net.schmizz.sshj.userauth.password.PasswordFinder
 import net.schmizz.sshj.userauth.password.Resource
+import java.io.StringReader
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -44,7 +42,7 @@ class SshSessionManager {
         client.addHostKeyVerifier(PromiscuousVerifier())
         client.timeout = params.timeoutSeconds * 1000
         client.connect(params.host, params.port)
-        client.auth(params.username, buildAuthMethods(params))
+        authenticate(client, params)
 
         sessions[params.sessionKey()] = client
         return params.sessionKey()
@@ -107,44 +105,25 @@ class SshSessionManager {
         sessions.keys.toList().forEach { disconnect(it) }
     }
 
-    private fun buildAuthMethods(params: SshConnectParams): List<AuthMethod> {
-        return when (params.authType.lowercase()) {
+    private fun authenticate(client: SSHClient, params: SshConnectParams) {
+        when (params.authType.lowercase()) {
             "password" -> {
                 val pwd = params.password ?: throw IllegalArgumentException("Password is required")
-                listOf(
-                    AuthPassword(object : PasswordFinder {
-                        override fun reqPassword(resource: Resource<*>?) = true
-                        override fun resolve(resource: Resource<*>?) = pwd.toCharArray()
-                        override fun shouldRetry(resource: Resource<*>?) = false
-                    })
-                )
+                client.authPassword(params.username, pwd)
             }
-            "private_key", "privatekey", "key" -> {
+            "private_key", "privatekey", "key", "private_key_passphrase", "key_passphrase" -> {
                 val keyContent = params.privateKey ?: throw IllegalArgumentException("Private key is required")
-                listOf(buildPublicKeyAuth(keyContent, params.passphrase))
-            }
-            "private_key_passphrase", "key_passphrase" -> {
-                val keyContent = params.privateKey ?: throw IllegalArgumentException("Private key is required")
-                listOf(buildPublicKeyAuth(keyContent, params.passphrase))
+                val keyFile = OpenSSHKeyFile()
+                keyFile.init(StringReader(keyContent), null, SimplePasswordFinder(params.passphrase))
+                client.authPublickey(params.username, keyFile)
             }
             else -> throw IllegalArgumentException("Unsupported auth type: ${params.authType}")
         }
     }
 
-    private fun buildPublicKeyAuth(keyContent: String, passphrase: String?): AuthPublickey {
-        val keyFile = OpenSSHKeyFile()
-        keyFile.init(StringReaderResource(keyContent), SimplePasswordFinder(passphrase))
-        return AuthPublickey(keyFile)
-    }
-
     private fun SshConnectParams.sessionKey(): String {
         return connectionId?.let { "conn_$it" }
             ?: "adhoc_${host}_${port}_${username}_${System.currentTimeMillis()}"
-    }
-
-    private class StringReaderResource(private val content: String) : Resource<String> {
-        override fun getReader(): java.io.Reader = content.reader()
-        override fun getName(): String = "inline-key"
     }
 
     private class SimplePasswordFinder(private val passphrase: String?) : PasswordFinder {
